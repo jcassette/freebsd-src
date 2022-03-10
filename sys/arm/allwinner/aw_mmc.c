@@ -79,6 +79,7 @@ __FBSDID("$FreeBSD$");
 #define	AW_MMC_RESSZ		2
 #define	AW_MMC_DMA_SEGS		(PAGE_SIZE / sizeof(struct aw_mmc_dma_desc))
 #define	AW_MMC_DMA_DESC_SIZE	(sizeof(struct aw_mmc_dma_desc) * AW_MMC_DMA_SEGS)
+#define	AW_MMC_DMA_DES1_ALIGN	4
 #define	AW_MMC_DMA_FTRGLEVEL	0x20070008
 
 #define	AW_MMC_RESET_RETRY	1000
@@ -87,6 +88,7 @@ __FBSDID("$FreeBSD$");
 
 struct aw_mmc_conf {
 	uint32_t	dma_xferlen;
+	uint32_t	dma_desc_shift;
 	bool		mask_data0;
 	bool		can_calibrate;
 	bool		new_timing;
@@ -112,10 +114,19 @@ static const struct aw_mmc_conf a64_emmc_conf = {
 	.can_calibrate = true,
 };
 
+static const struct aw_mmc_conf d1_mmc_conf = {
+	.dma_xferlen = 0x1FFC,
+	.dma_desc_shift = 2,
+	.mask_data0 = true,
+	.can_calibrate = true,
+	.new_timing = true,
+};
+
 static struct ofw_compat_data compat_data[] = {
 	{"allwinner,sun4i-a10-mmc", (uintptr_t)&a10_mmc_conf},
 	{"allwinner,sun5i-a13-mmc", (uintptr_t)&a13_mmc_conf},
 	{"allwinner,sun7i-a20-mmc", (uintptr_t)&a13_mmc_conf},
+	{"allwinner,sun20i-d1-mmc", (uintptr_t)&d1_mmc_conf},
 	{"allwinner,sun50i-a64-mmc", (uintptr_t)&a64_mmc_conf},
 	{"allwinner,sun50i-a64-emmc", (uintptr_t)&a64_emmc_conf},
 	{NULL,             0}
@@ -194,7 +205,7 @@ static int aw_mmc_release_host(device_t, device_t);
 SYSCTL_NODE(_hw, OID_AUTO, aw_mmc, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "aw_mmc driver");
 
-static int aw_mmc_debug = 0;
+static int aw_mmc_debug = 0xF;
 SYSCTL_INT(_hw_aw_mmc, OID_AUTO, debug, CTLFLAG_RWTUN, &aw_mmc_debug, 0,
     "Debug level bit0=card changes bit1=ios changes, bit2=interrupts, bit3=commands");
 #define	AW_MMC_DEBUG_CARD	0x1
@@ -619,16 +630,14 @@ aw_dma_cb(void *arg, bus_dma_segment_t *segs, int nsegs, int err)
 
 	dma_desc = sc->aw_dma_desc;
 	for (i = 0; i < nsegs; i++) {
-		if (segs[i].ds_len == sc->aw_mmc_conf->dma_xferlen)
-			dma_desc[i].buf_size = 0;		/* Size of 0 indicate max len */
-		else
-			dma_desc[i].buf_size = segs[i].ds_len;
-		dma_desc[i].buf_addr = segs[i].ds_addr;
+		dma_desc[i].buf_size = roundup2(segs[i].ds_len, 4);
+		dma_desc[i].buf_addr = segs[i].ds_addr >>
+		    sc->aw_mmc_conf->dma_desc_shift;
 		dma_desc[i].config = AW_MMC_DMA_CONFIG_CH |
-			AW_MMC_DMA_CONFIG_OWN | AW_MMC_DMA_CONFIG_DIC;
-
-		dma_desc[i].next = sc->aw_dma_desc_phys +
-			((i + 1) * sizeof(struct aw_mmc_dma_desc));
+		    AW_MMC_DMA_CONFIG_OWN | AW_MMC_DMA_CONFIG_DIC;
+		dma_desc[i].next = (sc->aw_dma_desc_phys +
+		    (i + 1) * sizeof(struct aw_mmc_dma_desc)) >>
+		    sc->aw_mmc_conf->dma_desc_shift;
 	}
 
 	dma_desc[0].config |= AW_MMC_DMA_CONFIG_FD;
@@ -690,7 +699,8 @@ aw_mmc_prepare_dma(struct aw_mmc_softc *sc)
 	AW_MMC_WRITE_4(sc, AW_MMC_IDIE, val);
 
 	/* Set DMA descritptor list address */
-	AW_MMC_WRITE_4(sc, AW_MMC_DLBA, sc->aw_dma_desc_phys);
+	AW_MMC_WRITE_4(sc, AW_MMC_DLBA, sc->aw_dma_desc_phys >>
+	    sc->aw_mmc_conf->dma_desc_shift);
 
 	/* FIFO trigger level */
 	AW_MMC_WRITE_4(sc, AW_MMC_FWLR, AW_MMC_DMA_FTRGLEVEL);
