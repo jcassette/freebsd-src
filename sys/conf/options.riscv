@@ -3,3 +3,6 @@
 RISCV				opt_global.h
 FPE				opt_global.h
 INTRNG				opt_global.h
+
+# SoC Support
+SOC_ALLWINNER_D1		opt_soc.h
