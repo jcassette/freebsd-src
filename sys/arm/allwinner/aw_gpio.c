@@ -401,6 +401,12 @@ static void aw_gpio_pic_disable_intr_locked(struct aw_gpio_softc *sc, struct int
 static void aw_gpio_pic_post_filter(device_t dev, struct intr_irqsrc *isrc);
 static int aw_gpio_register_isrcs(struct aw_gpio_softc *sc);
 
+#if 0
+#define dprintf(format, arg...)	device_printf(sc->sc_dev, "%s: " format, __func__, arg)
+#else
+#define dprintf(format, arg...)
+#endif
+
 #define	AW_GPIO_WRITE(_sc, _off, _val)		\
 	bus_write_4((_sc)->sc_res[AW_GPIO_MEMRES], _off, _val)
 #define	AW_GPIO_READ(_sc, _off)		\
@@ -409,7 +415,7 @@ static int aw_gpio_register_isrcs(struct aw_gpio_softc *sc);
 static uint32_t
 aw_gpio_get_function(struct aw_gpio_softc *sc, uint32_t pin)
 {
-	uint32_t bank, func, offset;
+	uint32_t bank, func, offset, reg;
 
 	/* Must be called with lock held. */
 	AW_GPIO_LOCK_ASSERT(sc);
@@ -418,9 +424,11 @@ aw_gpio_get_function(struct aw_gpio_softc *sc, uint32_t pin)
 		return (0);
 	bank = sc->conf->padconf->pins[pin].port;
 	pin = sc->conf->padconf->pins[pin].pin;
+	reg = AW_GPIO_GP_CFG(sc, bank, pin >> 3);
 	offset = ((pin & 0x07) << 2);
 
-	func = AW_GPIO_READ(sc, AW_GPIO_GP_CFG(sc, bank, pin >> 3));
+	func = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, func);
 
 	return ((func >> offset) & 0xF);
 }
@@ -428,7 +436,7 @@ aw_gpio_get_function(struct aw_gpio_softc *sc, uint32_t pin)
 static int
 aw_gpio_set_function(struct aw_gpio_softc *sc, uint32_t pin, uint32_t f)
 {
-	uint32_t bank, data, offset;
+	uint32_t bank, data, offset, reg;
 
 	/* Check if the function exists in the padconf data */
 	if (sc->conf->padconf->pins[pin].functions[f] == NULL)
@@ -439,12 +447,15 @@ aw_gpio_set_function(struct aw_gpio_softc *sc, uint32_t pin, uint32_t f)
 
 	bank = sc->conf->padconf->pins[pin].port;
 	pin = sc->conf->padconf->pins[pin].pin;
+	reg = AW_GPIO_GP_CFG(sc, bank, pin >> 3);
 	offset = ((pin & 0x07) << 2);
 
-	data = AW_GPIO_READ(sc, AW_GPIO_GP_CFG(sc, bank, pin >> 3));
+	data = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, data);
 	data &= ~(0xF << offset);
 	data |= (f << offset);
-	AW_GPIO_WRITE(sc, AW_GPIO_GP_CFG(sc, bank, pin >> 3), data);
+	AW_GPIO_WRITE(sc, reg, data);
+	dprintf("offset=%x write %x\n", reg, data);
 
 	return (0);
 }
@@ -452,16 +463,18 @@ aw_gpio_set_function(struct aw_gpio_softc *sc, uint32_t pin, uint32_t f)
 static uint32_t
 aw_gpio_get_pud(struct aw_gpio_softc *sc, uint32_t pin)
 {
-	uint32_t bank, offset, val;
+	uint32_t bank, offset, reg, val;
 
 	/* Must be called with lock held. */
 	AW_GPIO_LOCK_ASSERT(sc);
 
 	bank = sc->conf->padconf->pins[pin].port;
 	pin = sc->conf->padconf->pins[pin].pin;
+	reg = AW_GPIO_GP_PUL(sc, bank, pin >> 4);
 	offset = ((pin & 0x0f) << 1);
 
-	val = AW_GPIO_READ(sc, AW_GPIO_GP_PUL(sc, bank, pin >> 4));
+	val = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, val);
 
 	return ((val >> offset) & AW_GPIO_PUD_MASK);
 }
@@ -469,7 +482,7 @@ aw_gpio_get_pud(struct aw_gpio_softc *sc, uint32_t pin)
 static void
 aw_gpio_set_pud(struct aw_gpio_softc *sc, uint32_t pin, uint32_t state)
 {
-	uint32_t bank, offset, val;
+	uint32_t bank, offset, reg, val;
 
 	if (aw_gpio_get_pud(sc, pin) == state)
 		return;
@@ -479,18 +492,21 @@ aw_gpio_set_pud(struct aw_gpio_softc *sc, uint32_t pin, uint32_t state)
 
 	bank = sc->conf->padconf->pins[pin].port;
 	pin = sc->conf->padconf->pins[pin].pin;
+	reg = AW_GPIO_GP_PUL(sc, bank, pin >> 4);
 	offset = ((pin & 0x0f) << 1);
 
-	val = AW_GPIO_READ(sc, AW_GPIO_GP_PUL(sc, bank, pin >> 4));
+	val = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, val);
 	val &= ~(AW_GPIO_PUD_MASK << offset);
 	val |= (state << offset);
-	AW_GPIO_WRITE(sc, AW_GPIO_GP_PUL(sc, bank, pin >> 4), val);
+	AW_GPIO_WRITE(sc, reg, val);
+	dprintf("offset=%x write %x\n", reg, val);
 }
 
 static uint32_t
 aw_gpio_get_drv(struct aw_gpio_softc *sc, uint32_t pin)
 {
-	uint32_t bank, idx, offset, val;
+	uint32_t bank, idx, offset, reg, val;
 
 	/* Must be called with lock held. */
 	AW_GPIO_LOCK_ASSERT(sc);
@@ -499,8 +515,10 @@ aw_gpio_get_drv(struct aw_gpio_softc *sc, uint32_t pin)
 	pin = sc->conf->padconf->pins[pin].pin;
 	offset = (pin << sc->conf->drv_pin_shift) & 0x1F;
 	idx = (pin << sc->conf->drv_pin_shift) >> 5;
+	reg = AW_GPIO_GP_DRV(sc, bank, idx);
 
-	val = AW_GPIO_READ(sc, AW_GPIO_GP_DRV(sc, bank, idx));
+	val = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, val);
 
 	return ((val >> offset) & AW_GPIO_DRV_MASK);
 }
@@ -508,7 +526,7 @@ aw_gpio_get_drv(struct aw_gpio_softc *sc, uint32_t pin)
 static void
 aw_gpio_set_drv(struct aw_gpio_softc *sc, uint32_t pin, uint32_t drive)
 {
-	uint32_t bank, idx, offset, val;
+	uint32_t bank, idx, offset, reg, val;
 
 	if (aw_gpio_get_drv(sc, pin) == drive)
 		return;
@@ -520,11 +538,14 @@ aw_gpio_set_drv(struct aw_gpio_softc *sc, uint32_t pin, uint32_t drive)
 	pin = sc->conf->padconf->pins[pin].pin;
 	offset = (pin << sc->conf->drv_pin_shift) & 0x1F;
 	idx = (pin << sc->conf->drv_pin_shift) >> 5;
+	reg = AW_GPIO_GP_DRV(sc, bank, idx);
 
-	val = AW_GPIO_READ(sc, AW_GPIO_GP_DRV(sc, bank, idx));
+	val = AW_GPIO_READ(sc, reg);
+	dprintf("offset=%x read %x\n", reg, val);
 	val &= ~(AW_GPIO_DRV_MASK << offset);
 	val |= (drive << offset);
-	AW_GPIO_WRITE(sc, AW_GPIO_GP_DRV(sc, bank, idx), val);
+	AW_GPIO_WRITE(sc, reg, val);
+	dprintf("offset=%x write %x\n", reg, val);
 }
 
 static int
@@ -984,11 +1005,14 @@ aw_fdt_configure_pins(device_t dev, phandle_t cfgxref)
 
 	/* Getting all prop for configuring pins */
 	pinlist = aw_gpio_parse_pins(node, &pins_nb);
-	if (pinlist == NULL)
+	if (pinlist == NULL) {
+		device_printf(dev, "No pin list\n");
 		return (ENOENT);
+	}
 
 	pin_function = aw_gpio_parse_function(node);
 	if (pin_function == NULL) {
+		device_printf(dev, "No pin function\n");
 		ret = ENOENT;
 		goto out;
 	}
@@ -1002,11 +1026,13 @@ aw_fdt_configure_pins(device_t dev, phandle_t cfgxref)
 	for (i = 0; i < pins_nb; i++) {
 		pin_num = aw_find_pinnum_by_name(sc, pinlist[i]);
 		if (pin_num == -1) {
+			device_printf(dev, "Cannot find number of pin %s\n", pinlist[i]);
 			ret = ENOENT;
 			goto out;
 		}
 		pin_func = aw_find_pin_func(sc, pin_num, pin_function);
 		if (pin_func == -1) {
+			device_printf(dev, "Cannot find function of pin %s\n", pinlist[i]);
 			ret = ENOENT;
 			goto out;
 		}
