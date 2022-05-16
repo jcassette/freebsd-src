@@ -651,9 +651,9 @@ static int
 aw_mmc_prepare_dma(struct aw_mmc_softc *sc)
 {
 	bus_dmasync_op_t sync_op;
-	int error;
+	int error, retry;
 	struct mmc_command *cmd;
-	uint32_t val;
+	uint32_t mask, val;
 
 #ifdef MMCCAM
 	cmd = &sc->ccb->mmcio.cmd;
@@ -676,14 +676,21 @@ aw_mmc_prepare_dma(struct aw_mmc_softc *sc)
 	bus_dmamap_sync(sc->aw_dma_buf_tag, sc->aw_dma_buf_map, sync_op);
 	bus_dmamap_sync(sc->aw_dma_tag, sc->aw_dma_map, BUS_DMASYNC_PREWRITE);
 
+	/* Reset the FIFO and DMA engines. */
+	mask = AW_MMC_GCTL_FIFO_RST | AW_MMC_GCTL_DMA_RST;
+	val = AW_MMC_READ_4(sc, AW_MMC_GCTL);
+	AW_MMC_WRITE_4(sc, AW_MMC_GCTL, val | mask);
+
+	retry = AW_MMC_RESET_RETRY;
+	while (--retry > 0 && (AW_MMC_READ_4(sc, AW_MMC_GCTL) & mask) != 0)
+		DELAY(100);
+	if (retry == 0)
+		device_printf(sc->aw_dev, "timeout resetting DMA/FIFO\n");
+
 	/* Enable DMA */
 	val = AW_MMC_READ_4(sc, AW_MMC_GCTL);
 	val &= ~AW_MMC_GCTL_FIFO_AC_MOD;
 	val |= AW_MMC_GCTL_DMA_ENB;
-	AW_MMC_WRITE_4(sc, AW_MMC_GCTL, val);
-
-	/* Reset DMA */
-	val |= AW_MMC_GCTL_DMA_RST;
 	AW_MMC_WRITE_4(sc, AW_MMC_GCTL, val);
 
 	AW_MMC_WRITE_4(sc, AW_MMC_DMAC, AW_MMC_DMAC_IDMAC_SOFT_RST);
@@ -797,8 +804,7 @@ aw_mmc_req_done(struct aw_mmc_softc *sc)
 
 		retry = AW_MMC_RESET_RETRY;
 		while (--retry > 0) {
-			if ((AW_MMC_READ_4(sc, AW_MMC_GCTL) &
-			    AW_MMC_GCTL_RESET) == 0)
+			if ((AW_MMC_READ_4(sc, AW_MMC_GCTL) & mask) == 0)
 				break;
 			DELAY(100);
 		}
